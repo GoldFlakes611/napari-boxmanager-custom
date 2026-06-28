@@ -26,6 +26,9 @@ contributions:
     - id: napari-boxmanager.organize_layer
       python_name: box_manager._qt.OrganizeLayer:OrganizeLayerWidget
       title: Add new layers with default values
+    - id: napari-boxmanager.gallery
+      python_name: box_manager._qt.Gallery:GalleryWidget
+      title: Particle gallery
 
 
   readers:
@@ -46,6 +49,8 @@ contributions:
       display_name: bandpass_filter
     - command: napari-boxmanager.organize_box
       display_name: match_mics
+    - command: napari-boxmanager.gallery
+      display_name: particle_gallery 
 
 
 
