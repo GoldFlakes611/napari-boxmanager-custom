@@ -1,10 +1,15 @@
 import math
+from pathlib import Path
+
 import numpy as np
 
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSpinBox, QComboBox, QCheckBox
+    QSpinBox, QComboBox, QCheckBox, QFileDialog
 )
+
+from napari.layers import Points
+from box_manager.io import get_writer
 
 
 class GalleryWidget(QWidget):
@@ -45,6 +50,7 @@ class GalleryWidget(QWidget):
         self.jump_button = QPushButton("Jump to selected")
         self.reject_button = QPushButton("Reject selected")
         self.keep_button = QPushButton("Keep selected")
+        self.save_all_button = QPushButton("Save all particles...")
 
         layout.addWidget(QLabel("Tomogram image layer"))
         layout.addWidget(self.image_combo)
@@ -67,6 +73,7 @@ class GalleryWidget(QWidget):
         layout.addWidget(self.jump_button)
         layout.addWidget(self.reject_button)
         layout.addWidget(self.keep_button)
+        layout.addWidget(self.save_all_button)
 
         self.status = QLabel("Selected: none")
         layout.addWidget(self.status)
@@ -78,6 +85,7 @@ class GalleryWidget(QWidget):
         self.jump_button.clicked.connect(self.jump_to_selected)
         self.reject_button.clicked.connect(lambda: self.set_keep_for_selected(False))
         self.keep_button.clicked.connect(lambda: self.set_keep_for_selected(True))
+        self.save_all_button.clicked.connect(self.save_all_particles)
 
         self.refresh_layers()
 
@@ -377,3 +385,101 @@ class GalleryWidget(QWidget):
         # Rebuild so hidden rejected particles disappear from the gallery.
         self.build_gallery()
         self.status.setText(f"{n_changed} particle(s) marked as {state}.")
+
+    def _make_layer_data_for_writer(self, points_layer):
+        """Build a BoxManager-compatible layer_data tuple for one Points layer."""
+        self._ensure_shown_mask(points_layer)
+
+        return [
+            (
+                points_layer.data,
+                {
+                    "metadata": points_layer.metadata,
+                    "features": points_layer.features,
+                    "shown": points_layer.shown,
+                    "size": points_layer.size,
+                    "edge_width": points_layer.edge_width,
+                    "edge_color": points_layer.edge_color,
+                    "face_color": points_layer.face_color,
+                    "symbol": points_layer.symbol,
+                    "out_of_slice_display": points_layer.out_of_slice_display,
+                    "opacity": points_layer.opacity,
+                },
+                "points",
+            )
+        ]
+
+    def save_all_particles(self):
+        """Save every BoxManager particle Points layer into a chosen directory.
+
+        The original source files are not overwritten. Each output file keeps the
+        original filename, but is written into the directory selected by the user.
+        Layers without an ``original_path`` metadata entry, unsupported file
+        extensions, or existing output files are skipped.
+        """
+        output_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose output directory for saved particle files",
+        )
+
+        if not output_dir:
+            self.status.setText("Save cancelled.")
+            return
+
+        output_dir = Path(output_dir)
+        saved = []
+        skipped = []
+        failed = []
+
+        for layer in self.viewer.layers:
+            if not isinstance(layer, Points):
+                continue
+
+            original_path = layer.metadata.get("original_path")
+            if not original_path:
+                skipped.append((layer.name, "missing original_path metadata"))
+                continue
+
+            original_path = Path(original_path)
+            extension = original_path.suffix.lower().lstrip(".")
+            if not extension:
+                skipped.append((layer.name, "missing file extension"))
+                continue
+
+            writer = get_writer(extension)
+            if writer is None:
+                skipped.append((layer.name, f"unsupported .{extension} writer"))
+                continue
+
+            output_path = output_dir / original_path.name
+            if output_path.exists():
+                skipped.append((layer.name, f"output already exists: {output_path.name}"))
+                continue
+
+            try:
+                writer(
+                    path=output_path,
+                    layer_data=self._make_layer_data_for_writer(layer),
+                    suffix=original_path.suffix,
+                    filament_spacing=0,
+                )
+            except Exception as exc:
+                failed.append((layer.name, str(exc)))
+                continue
+
+            saved.append(output_path.name)
+
+        message = f"Saved {len(saved)} particle file(s)."
+        if skipped:
+            message += f" Skipped {len(skipped)}."
+        if failed:
+            message += f" Failed {len(failed)}."
+        self.status.setText(message)
+
+        if skipped or failed:
+            print("Save all particles summary")
+            for name, reason in skipped:
+                print(f"SKIPPED: {name}: {reason}")
+            for name, reason in failed:
+                print(f"FAILED: {name}: {reason}")
+
