@@ -18,8 +18,8 @@ class GalleryWidget(QWidget):
         self.tile_shape = None
         self.base_gallery = None
 
-        self.selected_particle_index = None
-        self.selected_tile_id = None
+        self.selected_particle_indices = set()
+        self.selected_tile_ids = set()
 
         layout = QVBoxLayout()
 
@@ -231,8 +231,8 @@ class GalleryWidget(QWidget):
 
         self.tile_shape = (box, box, ncols)
         self.base_gallery = gallery
-        self.selected_particle_index = None
-        self.selected_tile_id = None
+        self.selected_particle_indices = set()
+        self.selected_tile_ids = set()
 
         if self.gallery_layer is not None and self.gallery_layer in self.viewer.layers:
             self.viewer.layers.remove(self.gallery_layer)
@@ -250,6 +250,21 @@ class GalleryWidget(QWidget):
         self.status.setText(
             f"Gallery built: {len(visible_indices)} particles. Click a tile to select."
         )
+
+    def _redraw_selection_overlay(self):
+        if self.base_gallery is None or self.tile_shape is None:
+            return
+
+        _, _, ncols = self.tile_shape
+        rgb = self._gray_to_rgb(self.base_gallery)
+
+        for tile_id in self.selected_tile_ids:
+            row = tile_id // ncols
+            col = tile_id % ncols
+            rgb = self._draw_selection_box(rgb, row, col)
+
+        self.gallery_layer.data = rgb
+        self.gallery_layer.refresh()
 
     def _on_gallery_click(self, layer, event):
         if self.tile_shape is None or self.base_gallery is None:
@@ -269,30 +284,36 @@ class GalleryWidget(QWidget):
             self.status.setText("Clicked outside particle tiles.")
             return
 
-        self.selected_particle_index = particle_index
-        self.selected_tile_id = tile_id
+        # Click once to select. Click the same tile again to deselect.
+        if particle_index in self.selected_particle_indices:
+            self.selected_particle_indices.remove(particle_index)
+            self.selected_tile_ids.discard(tile_id)
+        else:
+            self.selected_particle_indices.add(particle_index)
+            self.selected_tile_ids.add(tile_id)
 
         points_layer = self._get_layer(self.points_combo)
-        points_layer.selected_data = {particle_index}
+        points_layer.selected_data = set(self.selected_particle_indices)
         points_layer.refresh()
 
-        rgb = self._gray_to_rgb(self.base_gallery)
-        rgb = self._draw_selection_box(rgb, row, col)
+        self._redraw_selection_overlay()
 
-        self.gallery_layer.data = rgb
-        self.gallery_layer.refresh()
-
-        self.status.setText(
-            f"Selected particle {particle_index}. "
-            "Use Reject, Keep, or Jump to selected."
-        )
+        n_selected = len(self.selected_particle_indices)
+        if n_selected == 0:
+            self.status.setText("Selected: none")
+        else:
+            self.status.setText(
+                f"Selected {n_selected} particle(s). "
+                "Use Reject, Keep, or Jump to selected."
+            )
 
     def jump_to_selected(self):
-        if self.selected_particle_index is not None:
-            self.jump_to_particle(self.selected_particle_index)
-            return
-
         points_layer = self._get_layer(self.points_combo)
+
+        if self.selected_particle_indices:
+            particle_index = next(iter(self.selected_particle_indices))
+            self.jump_to_particle(particle_index)
+            return
 
         if points_layer is None or not points_layer.selected_data:
             self.status.setText("No particle selected.")
@@ -331,17 +352,16 @@ class GalleryWidget(QWidget):
             self.status.setText("No points layer selected.")
             return
 
-        if self.selected_particle_index is None and not points_layer.selected_data:
-            self.status.setText("No particle selected.")
+        indices = set(self.selected_particle_indices)
+
+        if not indices and points_layer.selected_data:
+            indices = set(points_layer.selected_data)
+
+        if not indices:
+            self.status.setText("No particles selected.")
             return
 
         self._ensure_keep_feature(points_layer)
-
-        indices = (
-            [self.selected_particle_index]
-            if self.selected_particle_index is not None
-            else list(points_layer.selected_data)
-        )
 
         for idx in indices:
             points_layer.features.loc[idx, "keep"] = bool(keep_value)
@@ -353,6 +373,8 @@ class GalleryWidget(QWidget):
         points_layer.refresh()
 
         state = "kept" if keep_value else "rejected"
-        self.status.setText(f"Particle {indices[0]} marked as {state}.")
+        n_changed = len(indices)
 
+        # Rebuild so hidden rejected particles disappear from the gallery.
         self.build_gallery()
+        self.status.setText(f"{n_changed} particle(s) marked as {state}.")
