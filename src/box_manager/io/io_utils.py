@@ -387,18 +387,18 @@ def to_napari_coordinates(
 def _generate_output_filename(
     orignal_filename: str, output_path: os.PathLike, suffix=""
 ):
-    if not os.path.isdir(output_path):
-        dirname = os.path.dirname(output_path)
-        file_base, extension = os.path.splitext(os.path.basename(output_path))
-        if not extension:  # in case '.box' is provided as output path.
-            file_base, extension = extension, file_base
-    else:
-        extension = suffix
-        dirname = output_path
-        file_base = os.path.splitext(os.path.basename(orignal_filename))[0]
+    output_path = pathlib.Path(output_path)
+    original_path = pathlib.Path(orignal_filename)
 
-    output_file = pathlib.Path(dirname, file_base + extension)
-    return output_file
+    if output_path.is_dir():
+        dirname = output_path
+        extension = suffix or original_path.suffix
+    else:
+        dirname = output_path.parent
+        extension = output_path.suffix or suffix or original_path.suffix
+
+    file_base = original_path.stem
+    return dirname / f"{file_base}{extension}"
 
 
 def resample_filament(

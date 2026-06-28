@@ -38,7 +38,7 @@ class GalleryWidget(QWidget):
         self.projection = QComboBox()
         self.projection.addItems(["middle", "mean", "max"])
 
-        self.hide_rejected = QCheckBox("Hide rejected points")
+        self.hide_rejected = QCheckBox("Hide hidden/rejected points")
         self.hide_rejected.setChecked(True)
 
         self.build_button = QPushButton("Build gallery")
@@ -98,24 +98,22 @@ class GalleryWidget(QWidget):
             return None
         return self.viewer.layers[name]
 
-    def _ensure_keep_feature(self, points_layer):
+    def _ensure_shown_mask(self, points_layer):
+        """Ensure the Points layer has a boolean shown mask.
+
+        BoxManager's writer already respects ``meta["shown"]`` when saving.
+        Using ``shown`` avoids adding a custom feature column such as ``keep``,
+        which can make saved coordinate files incompatible with BoxManager's
+        expected metadata schema.
+        """
         n = len(points_layer.data)
 
-        if points_layer.features is None or len(points_layer.features) == 0:
-            points_layer.features = {"keep": np.ones(n, dtype=bool)}
+        shown = getattr(points_layer, "shown", None)
+        if shown is None or len(shown) != n:
+            points_layer.shown = np.ones(n, dtype=bool)
             return
 
-        if "keep" not in points_layer.features:
-            points_layer.features["keep"] = np.ones(n, dtype=bool)
-            return
-
-        keep = np.asarray(points_layer.features["keep"]).astype(bool)
-
-        if len(keep) != n:
-            new_keep = np.ones(n, dtype=bool)
-            m = min(len(keep), n)
-            new_keep[:m] = keep[:m]
-            points_layer.features["keep"] = new_keep
+        points_layer.shown = np.asarray(shown, dtype=bool)
 
     def _crop_thumbnail(self, volume, point, box):
         z, y, x = np.round(point[-3:]).astype(int)
@@ -195,16 +193,16 @@ class GalleryWidget(QWidget):
         if volume.ndim < 3:
             raise ValueError("GalleryWidget expects a 3D tomogram image layer.")
 
-        self._ensure_keep_feature(points_layer)
+        self._ensure_shown_mask(points_layer)
 
         box = int(self.box_size.value())
         ncols = int(self.ncols.value())
 
-        keep = np.asarray(points_layer.features["keep"]).astype(bool)
+        shown = np.asarray(points_layer.shown, dtype=bool)
 
         visible_indices = [
             i for i in range(len(points))
-            if keep[i] or not self.hide_rejected.isChecked()
+            if shown[i] or not self.hide_rejected.isChecked()
         ]
 
         if len(visible_indices) == 0:
@@ -234,17 +232,19 @@ class GalleryWidget(QWidget):
         self.selected_particle_indices = set()
         self.selected_tile_ids = set()
 
-        if self.gallery_layer is not None and self.gallery_layer in self.viewer.layers:
-            self.viewer.layers.remove(self.gallery_layer)
+        if self.gallery_layer is None or self.gallery_layer not in self.viewer.layers:
+            self.gallery_layer = self.viewer.add_image(
+                self._gray_to_rgb(gallery),
+                name="particle_gallery",
+                rgb=True,
+                metadata={"is_particle_gallery": True},
+            )
+        else:
+            self.gallery_layer.data = self._gray_to_rgb(gallery)
+            self.gallery_layer.refresh()
 
-        self.gallery_layer = self.viewer.add_image(
-            self._gray_to_rgb(gallery),
-            name="particle_gallery",
-            rgb=True,
-            metadata={"is_particle_gallery": True},
-        )
-
-        self.gallery_layer.mouse_drag_callbacks.append(self._on_gallery_click)
+        if self._on_gallery_click not in self.gallery_layer.mouse_drag_callbacks:
+            self.gallery_layer.mouse_drag_callbacks.append(self._on_gallery_click)
 
         self.viewer.layers.selection.active = self.gallery_layer
         self.status.setText(
@@ -361,14 +361,13 @@ class GalleryWidget(QWidget):
             self.status.setText("No particles selected.")
             return
 
-        self._ensure_keep_feature(points_layer)
+        self._ensure_shown_mask(points_layer)
 
+        shown = np.asarray(points_layer.shown, dtype=bool).copy()
         for idx in indices:
-            points_layer.features.loc[idx, "keep"] = bool(keep_value)
-
-        if self.hide_rejected.isChecked():
-            keep = np.asarray(points_layer.features["keep"]).astype(bool)
-            points_layer.shown = keep
+            if 0 <= idx < len(shown):
+                shown[idx] = bool(keep_value)
+        points_layer.shown = shown
 
         points_layer.refresh()
 

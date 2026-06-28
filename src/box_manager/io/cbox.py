@@ -365,37 +365,51 @@ def _fill_meta_features_idx(
 ################
 from typing import Dict
 
-
 def write_cbox(path: os.PathLike, data: Dict[str, pd.DataFrame], **kwargs):
+    path = os.path.abspath(os.fspath(path))
+    print("WRITE_CBOX PATH:", repr(path))
+
     sfile = star.StarFile(path)
     tags = []
+
+    version_df = pd.DataFrame(
+        [["_cbox_format_version", "1.0"]]
+    )
     version_df = pd.DataFrame([["1.0"]], columns=["_cbox_format_version"])
+
     sfile.update("global", version_df, False)
     tags.append("global")
+
     if "filament_vertices" in data:
         sfile.update("filament_vertices", data["filament_vertices"], True)
         tags.append("filament_vertices")
 
     df = data["cryolo"]
+
     include_slices = []
-    if "_CoordinateZ" in df.columns:
-        if not df["_CoordinateZ"].isnull().values.any():
-            include_slices = [
-                a
-                for a in np.unique(df["_CoordinateZ"]).tolist()
-                if not np.isnan(a)
-            ]
+    if "_CoordinateZ" in df.columns and not df["_CoordinateZ"].isnull().values.any():
+        include_slices = [
+            z for z in np.unique(df["_CoordinateZ"]).tolist()
+            if not np.isnan(z)
+        ]
 
     if "empty_slices" in kwargs:
         include_slices.extend(kwargs["empty_slices"])
-    include_slices.sort()
+
+    include_slices = sorted(set(include_slices))
+
     sfile.update("cryolo", df, True)
     tags.append("cryolo")
+
     include_df = pd.DataFrame(include_slices, columns=["_slice_index"])
     sfile.update("cryolo_include", include_df, True)
     tags.append("cryolo_include")
+
     sfile.write_star_file(overwrite=True, tags=tags)
 
+    print("EXISTS AFTER WRITE:", os.path.exists(path))
+    if os.path.exists(path):
+        print("SIZE AFTER WRITE:", os.path.getsize(path))
 
 def _make_df_data(
     coordinates: pd.DataFrame,
